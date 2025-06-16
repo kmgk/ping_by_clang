@@ -7,6 +7,7 @@
 #include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <sys/time.h> // for gettimeofday
 
 // チェックサム計算のための関数プロトタイプ
@@ -29,7 +30,7 @@ int main(int argc, char *argv[])
 	// AF_INET: IPv4
 	// SOCK_RAW: RAWソケット
 	// IPPROTO_ICMP: ICMPプロトコル
-	if ((sockfd = socket(AF_INET, SOCK_RAW, IPPPROTO_ICMP)) < 0)
+	if ((sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)) < 0)
 	{
 		perror("socket error");
 		return 1;
@@ -44,7 +45,7 @@ int main(int argc, char *argv[])
 	{
 		// IPアドレスとして認識できなかった場合、ホスト名解決を試みる
 		struct hostent *he;
-		if ((he = gethostname(target_host)) == NULL)
+		if ((he = gethostbyname(target_host)) == NULL)
 		{
 			perror("gethostbyname error");
 			close(sockfd);
@@ -62,18 +63,18 @@ int main(int argc, char *argv[])
 
 	// ICMPヘッダの初期化
 	memset(send_buffer, 0, PACKET_SIZE);
-	icmp_hdr->icmp_type = ICMP_ECHO;
-	icmp_hdr->icmp_code = 0;
-	icmp_hdr->icmp_id = getpid(); // プロセスIDをIDとして使用
-	icmp_hdr->icmp_seq = 1;				// シーケンス番号(今回は固定)
+	icmp_hdr->type = ICMP_ECHO;
+	icmp_hdr->code = 0;
+	icmp_hdr->un.echo.id = getpid(); // プロセスIDをIDとして使用
+	icmp_hdr->un.echo.sequence = 1;				// シーケンス番号(今回は固定)
 
 	// ペイロードにタイムスタンプを埋め込む（往復時間計測に必要）
 	struct timeval *tval = (struct timeval *)(send_buffer + sizeof(struct icmphdr));
 	gettimeofday(tval, NULL);
 
 	// ICMPチェックサムの計算
-	icmp_hdr->icmp_cksum = 0;
-	icmp_hdr->icmp_cksum = in_cksum((unsigned short *)send_buffer, PACKET_SIZE);
+	icmp_hdr->checksum = 0;
+	icmp_hdr->checksum = in_cksum((unsigned short *)send_buffer, PACKET_SIZE);
 
 	printf("PING %s (%s) %d(%d) bytes of data.\n", target_host, inet_ntoa(dest_addr.sin_addr), PACKET_SIZE - sizeof(struct icmphdr), PACKET_SIZE);
 
@@ -83,13 +84,13 @@ int main(int argc, char *argv[])
 	for (count = 0; count < MAX_PING; count++)
 	{
 		// シーケンス番号を更新
-		icmp_hdr->icmp_seq = htons(count);
+		icmp_hdr->un.echo.sequence = htons(count);
 		// ペイロードにタイムスタンプを再度埋め込み
 		gettimeofday(tval, NULL);
 
 		// チェックサムを再計算
-		icmp_hdr->icmp_cksum = 0;
-		icmp_hdr->icmp_cksum = in_cksum((unsigned short *)send_buffer, PACKET_SIZE);
+		icmp_hdr->checksum = 0;
+		icmp_hdr->checksum = in_cksum((unsigned short *)send_buffer, PACKET_SIZE);
 
 		// パケットの送信
 		if (sendto(sockfd, send_buffer, PACKET_SIZE, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) <= 0)
@@ -115,7 +116,9 @@ int main(int argc, char *argv[])
 		struct icmphdr *recv_icmp_hdr = (struct icmphdr *)(recv_buffer + ip_hdr_len);
 
 		// 受信したパケットがICMPエコー応答であり、かつ自分のID/シーケンス番号と一致するか確認
-		if (recv_icmp_hdr->icmp_type == ICMP_ECHOREPLY && recv_icmp_hdr->icmp_id == getpid() && recv_icmp_hdr->icmp_seq == htons(count))
+		if (recv_icmp_hdr->type == ICMP_ECHOREPLY &&
+			recv_icmp_hdr->un.echo.id == getpid() &&
+			recv_icmp_hdr->un.echo.sequence == htons(count))
 		{
 			// 往復時間の計算
 			struct timeval *recv_tval = (struct timeval *)(recv_buffer + ip_hdr_len + sizeof(struct icmphdr));
@@ -125,11 +128,16 @@ int main(int argc, char *argv[])
 			long long rtt_us = (tv_now.tv_sec - recv_tval->tv_sec) * 1000000LL + (tv_now.tv_usec - recv_tval->tv_usec);
 			double rtt_ms = (double)rtt_us / 1000.0;
 
-			printf("%d bytes from %s: icmp_seq=%d ttl=%d time=%.2f ms\n",bytes_received - ip_hdr_len, inet_ntoa(from_addr.sin_addr), ntohs(recv_icmp_hdr->icmp_seq),ip_hdr->ip_ttl, rtt_ms);
+			printf("%d bytes from %s: icmp_seq=%d ttl=%d time=%.2f ms\n",
+				bytes_received - ip_hdr_len,
+				inet_ntoa(from_addr.sin_addr),
+				ntohs(recv_icmp_hdr->un.echo.sequence),
+				ip_hdr->ip_ttl,
+				rtt_ms);
 		}
 		else
 		{
-			printf("Received unexpected ICMP packet type %d or ID/Seq mismatch\n", recv_icmp_hdr->icmp_type);
+			printf("Received unexpected ICMP packet type %d or ID/Seq mismatch\n", recv_icmp_hdr->type);
 		}
 
 		sleep(1);
