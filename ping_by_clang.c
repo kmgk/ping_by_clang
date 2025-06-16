@@ -75,6 +75,66 @@ int main(int argc, char *argv[])
 	icmp_hdr->icmp_cksum = 0;
 	icmp_hdr->icmp_cksum = in_cksum((unsigned short *)send_buffer, PACKET_SIZE);
 
+	printf("PING %s (%s) %d(%d) bytes of data.\n", target_host, inet_ntoa(dest_addr.sin_addr), PACKET_SIZE - sizeof(struct icmphdr), PACKET_SIZE);
+
+	int count = 0;
+	const int MAX_PING = 4; // 送信するPingの回数
+
+	for (count = 0; count < MAX_PING; count++)
+	{
+		// シーケンス番号を更新
+		icmp_hdr->icmp_seq = htons(count);
+		// ペイロードにタイムスタンプを再度埋め込み
+		gettimeofday(tval, NULL);
+
+		// チェックサムを再計算
+		icmp_hdr->icmp_cksum = 0;
+		icmp_hdr->icmp_cksum = in_cksum((unsigned short *)send_buffer, PACKET_SIZE);
+
+		// パケットの送信
+		if (sendto(sockfd, send_buffer, PACKET_SIZE, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) <= 0)
+		{
+			perror("sendto error");
+			break;
+		}
+
+		// 応答の受信
+		char recv_buffer[1500]; // 最大MTUサイズを考慮
+		struct sockaddr_in from_addr;
+		socklen_t from_len = sizeof(from_addr);
+		int bytes_received = recvfrom(sockfd, recv_buffer, sizeof(recv_buffer), 0, (struct sockaddr *)&from_addr, &from_len);
+		if (bytes_received < 0) {
+			perror("recvfrom error");
+			continue;
+		}
+
+		// IPヘッダとICMPヘッダの解析
+		struct ip *ip_hdr = (struct ip *)recv_buffer;
+		int ip_hdr_len = ip_hdr->ip_hl * 4; // IPヘッダ長は4バイト単位
+
+		struct icmphdr *recv_icmp_hdr = (struct icmphdr *)(recv_buffer + ip_hdr_len);
+
+		// 受信したパケットがICMPエコー応答であり、かつ自分のID/シーケンス番号と一致するか確認
+		if (recv_icmp_hdr->icmp_type == ICMP_ECHOREPLY && recv_icmp_hdr->icmp_id == getpid() && recv_icmp_hdr->icmp_seq == htons(count))
+		{
+			// 往復時間の計算
+			struct timeval *recv_tval = (struct timeval *)(recv_buffer + ip_hdr_len + sizeof(struct icmphdr));
+			struct timeval tv_now;
+			gettimeofday(&tv_now, NULL);
+
+			long long rtt_us = (tv_now.tv_sec - recv_tval->tv_sec) * 1000000LL + (tv_now.tv_usec - recv_tval->tv_usec);
+			double rtt_ms = (double)rtt_us / 1000.0;
+
+			printf("%d bytes from %s: icmp_seq=%d ttl=%d time=%.2f ms\n",bytes_received - ip_hdr_len, inet_ntoa(from_addr.sin_addr), ntohs(recv_icmp_hdr->icmp_seq),ip_hdr->ip_ttl, rtt_ms);
+		}
+		else
+		{
+			printf("Received unexpected ICMP packet type %d or ID/Seq mismatch\n", recv_icmp_hdr->icmp_type);
+		}
+
+		sleep(1);
+	}
+
 
 	close(sockfd); // close socket
 
