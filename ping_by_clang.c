@@ -83,6 +83,30 @@ int main(int argc, char *argv[])
 
 // ICMPチェックサム計算関数
 unsigned short in_cksum(unsigned short *addr, int len) {
-	// 後で実装
-	return 0;
+	int sum = 0;
+	unsigned short answer = 0;
+	unsigned short *w = addr;
+	int nleft = len;
+
+	// 16ビットずつ加算
+	while (nleft > 1)
+	{
+		sum += *w++;
+		nleft -= 2;
+	}
+
+	// 奇数バイトが残っていた場合
+	if (nleft == 1)
+	{
+		*(unsigned char *)(&answer) = *(unsigned char *)w;
+		sum += answer;
+	}
+
+	// キャリーを畳み込む
+	sum = (sum >> 16) + (sum & 0xffff);
+	sum += (sum >> 16);
+
+	// 1の補数を取る
+	answer = ~sum;
+	return answer;
 }
