@@ -55,7 +55,26 @@ int main(int argc, char *argv[])
 
 	printf("PING %s (%s)\n", target_host, inet_ntoa(dest_addr.sin_addr));
 
-	// ここにパケット送受信のロジックを記述
+	// ICMPパケットの設定
+	const int PACKET_SIZE = 64; // ICMPヘッダ(8バイト) + データ(56バイト)
+	char send_buffer[PACKET_SIZE];
+	struct icmphdr *icmp_hdr = (struct icmphdr *)send_buffer;
+
+	// ICMPヘッダの初期化
+	memset(send_buffer, 0, PACKET_SIZE);
+	icmp_hdr->icmp_type = ICMP_ECHO;
+	icmp_hdr->icmp_code = 0;
+	icmp_hdr->icmp_id = getpid(); // プロセスIDをIDとして使用
+	icmp_hdr->icmp_seq = 1;				// シーケンス番号(今回は固定)
+
+	// ペイロードにタイムスタンプを埋め込む（往復時間計測に必要）
+	struct timeval *tval = (struct timeval *)(send_buffer + sizeof(struct icmphdr));
+	gettimeofday(tval, NULL);
+
+	// ICMPチェックサムの計算
+	icmp_hdr->icmp_cksum = 0;
+	icmp_hdr->icmp_cksum = in_cksum((unsigned short *)send_buffer, PACKET_SIZE);
+
 
 	close(sockfd); // close socket
 
